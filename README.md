@@ -23,24 +23,30 @@ Point repo-triage at any local Git repository and get four diagnostic visualisat
 ## Building
 
 ```bash
-# 1. Clone the repo
+# Clone the repo
 git clone https://github.com/austin-yu/repo-triage.git
 cd repo-triage
 
-# 2. Build the frontend
-cd web && npm install && npm run build && cd ..
-
-# 3. Build the single binary (embeds the frontend)
-go build -o repo-triage
+# Build everything (frontend + Go binary)
+make build
 ```
 
-This produces a single `repo-triage` executable (~8 MB) with the UI embedded.
+This produces a single `bin/repo-triage` executable (~8 MB) with the UI embedded.
+
+Other make targets:
+
+| Command | Description |
+|---|---|
+| `make build` | Build frontend and Go binary to `bin/` |
+| `make frontend` | Build just the frontend |
+| `make clean` | Remove all build artifacts |
+| `make dev` | Run the Go backend for development |
 
 ## Usage
 
 ```bash
 # Run the server
-./repo-triage
+./bin/repo-triage
 ```
 
 Open **http://localhost:8080** in your browser, paste the absolute path to any local Git repository, and click **Analyze Repository**.

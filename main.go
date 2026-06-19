@@ -19,7 +19,7 @@ const (
 	TimePeriod          = "1 year ago"
 	GitListLimit        = 30
 	CouplingAlertsLimit = 5
-	AnalysisTaskCount   = 4
+	AnalysisTaskCount   = 6
 	DefaultServerPort   = ":8080"
 )
 
@@ -54,11 +54,26 @@ type Contributor struct {
 	Commits int    `json:"commits"`
 }
 
+type SleepingGiant struct {
+	Name       string `json:"name"`
+	Lines      int    `json:"lines"`
+	DaysSince  int    `json:"daysSinceLastCommit"`
+	Complexity int    `json:"complexity"`
+}
+
+type MonthlyActivity struct {
+	Month     string `json:"month"`
+	Commits   int    `json:"commits"`
+	Hotfixes  int    `json:"hotfixes"`
+}
+
 type RepoReport struct {
-	RiskMatrix    []FileRisk    `json:"riskMatrix"`
-	BusFactor     []Contributor `json:"busFactor"`
-	Firefighting  int           `json:"firefightingIncidents"`
-	CouplingAlert []string      `json:"couplingAlerts"`
+	RiskMatrix      []FileRisk        `json:"riskMatrix"`
+	BusFactor       []Contributor     `json:"busFactor"`
+	Firefighting    int               `json:"firefightingIncidents"`
+	CouplingAlert   []string          `json:"couplingAlerts"`
+	SleepingGiants  []SleepingGiant   `json:"sleepingGiants"`
+	MonthlyActivity []MonthlyActivity `json:"monthlyActivity"`
 }
 
 // --- Execution Layer ---
@@ -165,7 +180,7 @@ func analyzeChurnAndBugs(executor CommandExecutor, repoPath string) (map[string]
 // analyzeContributors extracts the Bus Factor data
 func analyzeContributors(executor CommandExecutor, repoPath string) ([]Contributor, error) {
 	cmd := fmt.Sprintf(
-		"git -C %s shortlog -sn --no-merges --since='%s'",
+		"git -C %s shortlog -sn --no-merges --since='%s' HEAD",
 		repoPath, TimePeriod,
 	)
 
@@ -221,6 +236,152 @@ func analyzeCoupling(executor CommandExecutor, repoPath string) ([]string, error
 	return strings.Split(raw, "\n"), nil
 }
 
+// analyzeSleepingGiants finds large, complex files that haven't been touched recently
+func analyzeSleepingGiants(executor CommandExecutor, repoPath string) ([]SleepingGiant, error) {
+	excludePattern := buildExcludePattern(ExcludePatterns)
+
+	// Find source files, get line counts, sorted by size descending
+	// Exclude binary/generated files and common non-code patterns
+	filesCmd := fmt.Sprintf(
+		"find %s -type f \\( -name '*.go' -o -name '*.ts' -o -name '*.js' -o -name '*.vue' "+
+			"-o -name '*.py' -o -name '*.java' -o -name '*.rs' -o -name '*.rb' -o -name '*.cpp' "+
+			"-o -name '*.c' -o -name '*.cs' -o -name '*.swift' -o -name '*.kt' \\) "+
+			"| grep -vE '%s' | head -50",
+		repoPath, excludePattern,
+	)
+
+	filesRaw, err := executor.Run(filesCmd)
+	if err != nil || filesRaw == "" {
+		return make([]SleepingGiant, 0), nil
+	}
+
+	files := strings.Split(filesRaw, "\n")
+	giants := make([]SleepingGiant, 0)
+
+	for _, file := range files {
+		if file == "" {
+			continue
+		}
+
+		// Get line count
+		wcCmd := fmt.Sprintf("wc -l < '%s'", file)
+		wcRaw, err := executor.Run(wcCmd)
+		if err != nil {
+			continue
+		}
+		lines, _ := strconv.Atoi(strings.TrimSpace(wcRaw))
+		if lines < 50 {
+			continue // skip small files
+		}
+
+		// Get days since last commit for this file
+		relPath := strings.TrimPrefix(file, repoPath+"/")
+		daysCmd := fmt.Sprintf(
+			"git -C %s log -1 --format='%%cr' -- '%s' 2>/dev/null",
+			repoPath, relPath,
+		)
+		daysRaw, err := executor.Run(daysCmd)
+		if err != nil || daysRaw == "" {
+			continue
+		}
+		daysSince := parseRelativeTime(daysRaw)
+
+		// Rough complexity: count functions/methods as a proxy
+		complexCmd := fmt.Sprintf(
+			"grep -cE '(^func |^def |function |class |interface )' '%s' 2>/dev/null || echo 0",
+			file,
+		)
+		complexRaw, _ := executor.Run(complexCmd)
+		complexity, _ := strconv.Atoi(strings.TrimSpace(complexRaw))
+
+		giants = append(giants, SleepingGiant{
+			Name:       relPath,
+			Lines:      lines,
+			DaysSince:  daysSince,
+			Complexity: complexity,
+		})
+	}
+
+	return giants, nil
+}
+
+// parseRelativeTime converts git's relative time (e.g. "3 months ago") to approximate days
+func parseRelativeTime(relative string) int {
+	parts := strings.Fields(relative)
+	if len(parts) < 2 {
+		return 0
+	}
+	num, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0
+	}
+	unit := parts[1]
+	switch {
+	case strings.HasPrefix(unit, "year"):
+		return num * 365
+	case strings.HasPrefix(unit, "month"):
+		return num * 30
+	case strings.HasPrefix(unit, "week"):
+		return num * 7
+	case strings.HasPrefix(unit, "day"):
+		return num
+	case strings.HasPrefix(unit, "hour"):
+		return 0
+	case strings.HasPrefix(unit, "minute"), strings.HasPrefix(unit, "second"):
+		return 0
+	}
+	return 0
+}
+
+// analyzeMonthlyActivity generates monthly commit and hotfix counts for the past 12 months
+func analyzeMonthlyActivity(executor CommandExecutor, repoPath string) ([]MonthlyActivity, error) {
+	// Get commits per month — use --date=format with %ad to avoid shell escaping issues
+	commitsCmd := "git -C " + repoPath + " log --date=format:'%Y-%m' --format='%ad' --since='" + TimePeriod + "' --no-merges | sort | uniq -c"
+	commitsRaw, err := executor.Run(commitsCmd)
+	if err != nil {
+		return make([]MonthlyActivity, 0), nil
+	}
+
+	commitsByMonth := parseCountList(commitsRaw)
+
+	// Get hotfixes per month
+	patterns := strings.Join(FirefightingPatterns, "|")
+	hotfixCmd := "git -C " + repoPath + " log --date=format:'%Y-%m' --format='%ad %s' --since='" + TimePeriod + "' --no-merges | " +
+		"grep -iE '" + patterns + "' | awk '{print $1}' | sort | uniq -c"
+	hotfixRaw, _ := executor.Run(hotfixCmd)
+	hotfixByMonth := parseCountList(hotfixRaw)
+
+	// Merge into a sorted list of all months
+	allMonths := make(map[string]bool)
+	for m := range commitsByMonth {
+		allMonths[m] = true
+	}
+	for m := range hotfixByMonth {
+		allMonths[m] = true
+	}
+
+	activity := make([]MonthlyActivity, 0, len(allMonths))
+	for month := range allMonths {
+		activity = append(activity, MonthlyActivity{
+			Month:    month,
+			Commits:  commitsByMonth[month],
+			Hotfixes: hotfixByMonth[month],
+		})
+	}
+
+	// Sort by month ascending
+	sortMonthlyActivity(activity)
+	return activity, nil
+}
+
+func sortMonthlyActivity(a []MonthlyActivity) {
+	for i := 1; i < len(a); i++ {
+		for j := i; j > 0 && a[j].Month < a[j-1].Month; j-- {
+			a[j], a[j-1] = a[j-1], a[j]
+		}
+	}
+}
+
 // --- Core Analysis Orchestrator ---
 
 // AnalysisOrchestrator coordinates concurrent analysis tasks with proper error handling
@@ -262,6 +423,8 @@ func (ao *AnalysisOrchestrator) Analyze(repoPath string) (*RepoReport, error) {
 	contributorChan := make(chan []Contributor, 1)
 	firefightingChan := make(chan int, 1)
 	couplingChan := make(chan []string, 1)
+	giantsChan := make(chan []SleepingGiant, 1)
+	activityChan := make(chan []MonthlyActivity, 1)
 
 	wg.Add(AnalysisTaskCount)
 
@@ -306,6 +469,26 @@ func (ao *AnalysisOrchestrator) Analyze(repoPath string) (*RepoReport, error) {
 		}
 	}()
 
+	// 5. Analyze Sleeping Giants
+	go func() {
+		defer wg.Done()
+		giants, err := analyzeSleepingGiants(ao.executor, repoPath)
+		recordError(err)
+		if err == nil {
+			giantsChan <- giants
+		}
+	}()
+
+	// 6. Analyze Monthly Activity
+	go func() {
+		defer wg.Done()
+		activity, err := analyzeMonthlyActivity(ao.executor, repoPath)
+		recordError(err)
+		if err == nil {
+			activityChan <- activity
+		}
+	}()
+
 	wg.Wait()
 
 	if firstErr != nil {
@@ -318,6 +501,8 @@ func (ao *AnalysisOrchestrator) Analyze(repoPath string) (*RepoReport, error) {
 	report.BusFactor = <-contributorChan
 	report.Firefighting = <-firefightingChan
 	report.CouplingAlert = <-couplingChan
+	report.SleepingGiants = <-giantsChan
+	report.MonthlyActivity = <-activityChan
 
 	// Build Risk Matrix by joining churn and bug data
 	for name, churn := range churnData {

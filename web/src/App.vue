@@ -55,6 +55,14 @@ const handleAnalyze = async () => {
   }
 }
 
+// --- Helpers ---
+const shortName = (path: string) => path.split('/').pop() || path
+
+const padMax = (values: number[], minPad = 1) => {
+  const max = Math.max(...values, 0)
+  return max + Math.max(Math.ceil(max * 0.2), minPad)
+}
+
 // --- 1. Risk Matrix: Scatter Plot (Churn vs Bugs) ---
 const scatterData = computed(() => {
   if (!report.value?.riskMatrix?.length) return { datasets: [] }
@@ -73,25 +81,36 @@ const scatterData = computed(() => {
   }
 })
 
-const scatterOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  plugins: {
-    legend: { display: false },
-    tooltip: {
-      callbacks: {
-        label: (context: any) => {
-          const point = context.raw
-          return `${point.rawFile} (Churn: ${point.x}, Bugs: ${point.y})`
+const scatterOptions = computed(() => {
+  const rm = report.value?.riskMatrix || []
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: (context: any) => {
+            const point = context.raw
+            return `${shortName(point.rawFile)} (Churn: ${point.x}, Bugs: ${point.y})`
+          }
         }
       }
+    },
+    scales: {
+      x: {
+        title: { display: true, text: 'Total Commits (Churn)' },
+        beginAtZero: true,
+        max: padMax(rm.map(f => f.churn))
+      },
+      y: {
+        title: { display: true, text: 'Bug Fixes' },
+        beginAtZero: true,
+        max: padMax(rm.map(f => f.bugs))
+      }
     }
-  },
-  scales: {
-    x: { title: { display: true, text: 'Total Commits (Churn)' }, beginAtZero: true },
-    y: { title: { display: true, text: 'Bug Fixes' }, beginAtZero: true }
   }
-}
+})
 
 // --- 2. Bus Factor: Donut Chart (Contributor Share) ---
 const donutColors = ['#a855f7', '#3b82f6', '#ef4444', '#f59e0b', '#10b981', '#6366f1', '#ec4899', '#14b8a6']
@@ -149,30 +168,41 @@ const bubbleData = computed(() => {
   }
 })
 
-const bubbleOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  plugins: {
-    legend: { display: false },
-    tooltip: {
-      callbacks: {
-        label: (context: any) => {
-          const p = context.raw
-          return [
-            p.rawFile,
-            `Lines: ${p.y}`,
-            `Age: ${p.x} days`,
-            `Complexity: ${p.complexity}`
-          ]
+const bubbleOptions = computed(() => {
+  const sg = report.value?.sleepingGiants || []
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: (context: any) => {
+            const p = context.raw
+            return [
+              shortName(p.rawFile),
+              `Lines: ${p.y}`,
+              `Age: ${p.x} days`,
+              `Complexity: ${p.complexity}`
+            ]
+          }
         }
       }
+    },
+    scales: {
+      x: {
+        title: { display: true, text: 'Days Since Last Commit' },
+        beginAtZero: true,
+        max: padMax(sg.map(g => g.daysSinceLastCommit), 7)
+      },
+      y: {
+        title: { display: true, text: 'Lines of Code' },
+        beginAtZero: true,
+        max: padMax(sg.map(g => g.lines), 50)
+      }
     }
-  },
-  scales: {
-    x: { title: { display: true, text: 'Days Since Last Commit' }, beginAtZero: true },
-    y: { title: { display: true, text: 'Lines of Code' }, beginAtZero: true }
   }
-}
+})
 
 // --- 4. Team Momentum: Dual-Axis Line Chart (Commits + Hotfixes per Month) ---
 const lineData = computed(() => {
@@ -188,6 +218,9 @@ const lineData = computed(() => {
         backgroundColor: 'rgba(59, 130, 246, 0.1)',
         fill: true,
         tension: 0.3,
+        pointRadius: 5,
+        pointHoverRadius: 7,
+        pointBackgroundColor: '#3b82f6',
         yAxisID: 'y'
       },
       {
@@ -198,38 +231,46 @@ const lineData = computed(() => {
         fill: true,
         tension: 0.3,
         borderDash: [5, 5],
+        pointRadius: 5,
+        pointHoverRadius: 7,
+        pointBackgroundColor: '#ef4444',
         yAxisID: 'y1'
       }
     ]
   }
 })
 
-const lineOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  interaction: { mode: 'index' as const, intersect: false },
-  plugins: {
-    legend: { position: 'top' as const, labels: { boxWidth: 12 } }
-  },
-  scales: {
-    x: { title: { display: true, text: 'Month' } },
-    y: {
-      type: 'linear' as const,
-      display: true,
-      position: 'left' as const,
-      title: { display: true, text: 'Commits' },
-      beginAtZero: true
+const lineOptions = computed(() => {
+  const ma = report.value?.monthlyActivity || []
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index' as const, intersect: false },
+    plugins: {
+      legend: { position: 'top' as const, labels: { boxWidth: 12 } }
     },
-    y1: {
-      type: 'linear' as const,
-      display: true,
-      position: 'right' as const,
-      title: { display: true, text: 'Hotfixes' },
-      beginAtZero: true,
-      grid: { drawOnChartArea: false }
+    scales: {
+      x: { title: { display: true, text: 'Month' } },
+      y: {
+        type: 'linear' as const,
+        display: true,
+        position: 'left' as const,
+        title: { display: true, text: 'Commits' },
+        beginAtZero: true,
+        max: padMax(ma.map(m => m.commits), 2)
+      },
+      y1: {
+        type: 'linear' as const,
+        display: true,
+        position: 'right' as const,
+        title: { display: true, text: 'Hotfixes' },
+        beginAtZero: true,
+        max: padMax(ma.map(m => m.hotfixes), 1),
+        grid: { drawOnChartArea: false }
+      }
     }
   }
-}
+})
 </script>
 
 <template>

@@ -256,12 +256,12 @@ func (ao *AnalysisOrchestrator) Analyze(repoPath string) (*RepoReport, error) {
 		}
 	}
 
-	// Result channels for concurrent tasks
-	churnChan := make(chan map[string]int)
-	bugChan := make(chan map[string]int)
-	contributorChan := make(chan []Contributor)
-	firefightingChan := make(chan int)
-	couplingChan := make(chan []string)
+	// Buffered channels so sends don't block before wg.Wait() completes
+	churnChan := make(chan map[string]int, 1)
+	bugChan := make(chan map[string]int, 1)
+	contributorChan := make(chan []Contributor, 1)
+	firefightingChan := make(chan int, 1)
+	couplingChan := make(chan []string, 1)
 
 	wg.Add(AnalysisTaskCount)
 

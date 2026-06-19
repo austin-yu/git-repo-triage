@@ -33,6 +33,30 @@ make build
 
 This produces a single `bin/repo-triage` executable (~8 MB) with the UI embedded.
 
+### Cross-compiling
+
+Go supports cross-compilation out of the box. Set `GOOS` and `GOARCH` before building:
+
+```bash
+# Build the frontend first
+make frontend
+
+# macOS (Apple Silicon)
+GOOS=darwin GOARCH=arm64 go build -o bin/repo-triage-darwin-arm64
+
+# macOS (Intel)
+GOOS=darwin GOARCH=amd64 go build -o bin/repo-triage-darwin-amd64
+
+# Linux (x86_64)
+GOOS=linux GOARCH=amd64 go build -o bin/repo-triage-linux-amd64
+
+# Linux (ARM64, e.g. AWS Graviton)
+GOOS=linux GOARCH=arm64 go build -o bin/repo-triage-linux-arm64
+
+# Windows (x86_64)
+GOOS=windows GOARCH=amd64 go build -o bin/repo-triage-windows-amd64.exe
+```
+
 Other make targets:
 
 | Command | Description |
@@ -44,10 +68,19 @@ Other make targets:
 
 ## Usage
 
+### macOS / Linux
+
 ```bash
-# Run the server
 ./bin/repo-triage
 ```
+
+### Windows
+
+```powershell
+.\bin\repo-triage-windows-amd64.exe
+```
+
+> **Note:** On Windows, Git and Bash (Git Bash) must be installed and available on the system PATH. Git for Windows includes both.
 
 Open **http://localhost:8080** in your browser, paste the absolute path to any local Git repository, and click **Analyze Repository**.
 

@@ -62,9 +62,9 @@ type SleepingGiant struct {
 }
 
 type MonthlyActivity struct {
-	Month     string `json:"month"`
-	Commits   int    `json:"commits"`
-	Hotfixes  int    `json:"hotfixes"`
+	Month    string `json:"month"`
+	Commits  int    `json:"commits"`
+	Hotfixes int    `json:"hotfixes"`
 }
 
 type RepoReport struct {

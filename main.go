@@ -1,8 +1,10 @@
 package main
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -12,6 +14,9 @@ import (
 	"strings"
 	"sync"
 )
+
+//go:embed web/dist
+var embeddedUI embed.FS
 
 // --- Constants ---
 
@@ -566,15 +571,44 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	// Serve API routes
 	http.HandleFunc("/api/analyze", handleAnalyze)
 	http.HandleFunc("/health", handleHealth)
 
-	fmt.Printf("Repository Triage Server running on http://localhost%s\n", DefaultServerPort)
-	fmt.Printf("  Endpoints:\n")
-	fmt.Printf("    GET /api/analyze?path=/path/to/repo - Analyze a repository\n")
-	fmt.Printf("    GET /health                         - Health check\n")
+	// Serve embedded frontend (built from web/dist)
+	uiFS, err := fs.Sub(embeddedUI, "web/dist")
+	if err != nil {
+		log.Fatal("Failed to load embedded UI:", err)
+	}
+	http.Handle("/", spaHandler{fs: http.FileServer(http.FS(uiFS)), static: uiFS})
+
+	fmt.Printf("Repository Triage running on http://localhost%s\n", DefaultServerPort)
 
 	if err := http.ListenAndServe(DefaultServerPort, nil); err != nil {
 		log.Fatal("Server failed to start:", err)
+	}
+}
+
+// spaHandler serves static files and falls back to index.html for client-side routing
+type spaHandler struct {
+	fs     http.Handler
+	static fs.FS
+}
+
+func (h spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Try serving the file directly
+	path := r.URL.Path
+	if path == "/" {
+		path = "index.html"
+	} else {
+		path = strings.TrimPrefix(path, "/")
+	}
+
+	// If the file exists, serve it; otherwise fall back to index.html (SPA)
+	if _, err := fs.Stat(h.static, path); err == nil {
+		h.fs.ServeHTTP(w, r)
+	} else {
+		r.URL.Path = "/"
+		h.fs.ServeHTTP(w, r)
 	}
 }

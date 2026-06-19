@@ -72,11 +72,19 @@ type MonthlyActivity struct {
 	Hotfixes int    `json:"hotfixes"`
 }
 
+type CouplingAlert struct {
+	SHA          string `json:"sha"`
+	Subject      string `json:"subject"`
+	FilesChanged int    `json:"filesChanged"`
+	Insertions   int    `json:"insertions"`
+	Deletions    int    `json:"deletions"`
+}
+
 type RepoReport struct {
 	RiskMatrix      []FileRisk        `json:"riskMatrix"`
 	BusFactor       []Contributor     `json:"busFactor"`
 	Firefighting    int               `json:"firefightingIncidents"`
-	CouplingAlert   []string          `json:"couplingAlerts"`
+	CouplingAlerts  []CouplingAlert   `json:"couplingAlerts"`
 	SleepingGiants  []SleepingGiant   `json:"sleepingGiants"`
 	MonthlyActivity []MonthlyActivity `json:"monthlyActivity"`
 }
@@ -221,24 +229,83 @@ func analyzeFirefighting(executor CommandExecutor, repoPath string) (int, error)
 	return count, nil
 }
 
-// analyzeCoupling extracts the Architectural Blast Radius data
-func analyzeCoupling(executor CommandExecutor, repoPath string) ([]string, error) {
+// analyzeCoupling extracts the Architectural Blast Radius data with commit SHAs
+func analyzeCoupling(executor CommandExecutor, repoPath string) ([]CouplingAlert, error) {
+	// Use a delimiter to pair each commit line with its stat line
 	cmd := fmt.Sprintf(
-		"git -C %s log --shortstat --oneline --since='%s' --no-merges | "+
-			"grep -E 'files? changed' | sort -nr -k 5 | head -%d",
-		repoPath, TimePeriod, CouplingAlertsLimit,
+		"git -C %s log --format='COMMIT %%H %%s' --shortstat --since='%s' --no-merges",
+		repoPath, TimePeriod,
 	)
 
 	raw, err := executor.Run(cmd)
 	if err != nil {
-		return nil, fmt.Errorf("coupling analysis failed: %w", err)
+		return make([]CouplingAlert, 0), nil
 	}
 
-	if raw == "" {
-		return []string{}, nil
+	alerts := parseCouplingAlerts(raw)
+
+	// Sort by files changed descending
+	for i := 1; i < len(alerts); i++ {
+		for j := i; j > 0 && alerts[j].FilesChanged > alerts[j-1].FilesChanged; j-- {
+			alerts[j], alerts[j-1] = alerts[j-1], alerts[j]
+		}
 	}
 
-	return strings.Split(raw, "\n"), nil
+	// Limit to top N
+	if len(alerts) > CouplingAlertsLimit {
+		alerts = alerts[:CouplingAlertsLimit]
+	}
+
+	return alerts, nil
+}
+
+// parseCouplingAlerts parses the paired COMMIT/stat lines from git log output
+func parseCouplingAlerts(raw string) []CouplingAlert {
+	alerts := make([]CouplingAlert, 0)
+	lines := strings.Split(raw, "\n")
+
+	var current *CouplingAlert
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		if strings.HasPrefix(line, "COMMIT ") {
+			rest := strings.TrimPrefix(line, "COMMIT ")
+			parts := strings.SplitN(rest, " ", 2)
+			sha := ""
+			subject := ""
+			if len(parts) >= 1 {
+				sha = parts[0]
+			}
+			if len(parts) >= 2 {
+				subject = parts[1]
+			}
+			current = &CouplingAlert{SHA: sha, Subject: subject}
+		} else if current != nil && strings.Contains(line, "changed") {
+			// Parse stat line like: "3 files changed, 45 insertions(+), 12 deletions(-)"
+			current.FilesChanged = extractStatNumber(line, "file")
+			current.Insertions = extractStatNumber(line, "insertion")
+			current.Deletions = extractStatNumber(line, "deletion")
+			alerts = append(alerts, *current)
+			current = nil
+		}
+	}
+
+	return alerts
+}
+
+// extractStatNumber pulls the number before a keyword in a git stat line
+func extractStatNumber(line string, keyword string) int {
+	parts := strings.Fields(line)
+	for i, part := range parts {
+		if strings.HasPrefix(part, keyword) && i > 0 {
+			n, _ := strconv.Atoi(parts[i-1])
+			return n
+		}
+	}
+	return 0
 }
 
 // analyzeSleepingGiants finds large, complex files that haven't been touched recently
@@ -427,7 +494,7 @@ func (ao *AnalysisOrchestrator) Analyze(repoPath string) (*RepoReport, error) {
 	bugChan := make(chan map[string]int, 1)
 	contributorChan := make(chan []Contributor, 1)
 	firefightingChan := make(chan int, 1)
-	couplingChan := make(chan []string, 1)
+	couplingChan := make(chan []CouplingAlert, 1)
 	giantsChan := make(chan []SleepingGiant, 1)
 	activityChan := make(chan []MonthlyActivity, 1)
 
@@ -505,7 +572,7 @@ func (ao *AnalysisOrchestrator) Analyze(repoPath string) (*RepoReport, error) {
 	bugData := <-bugChan
 	report.BusFactor = <-contributorChan
 	report.Firefighting = <-firefightingChan
-	report.CouplingAlert = <-couplingChan
+	report.CouplingAlerts = <-couplingChan
 	report.SleepingGiants = <-giantsChan
 	report.MonthlyActivity = <-activityChan
 

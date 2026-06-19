@@ -20,11 +20,12 @@ interface FileRisk { name: string; churn: number; bugs: number }
 interface Contributor { name: string; commits: number }
 interface SleepingGiant { name: string; lines: number; daysSinceLastCommit: number; complexity: number }
 interface MonthlyActivity { month: string; commits: number; hotfixes: number }
+interface CouplingAlert { sha: string; subject: string; filesChanged: number; insertions: number; deletions: number }
 interface RepoReport {
   riskMatrix: FileRisk[];
   busFactor: Contributor[];
   firefightingIncidents: number;
-  couplingAlerts: string[];
+  couplingAlerts: CouplingAlert[];
   sleepingGiants: SleepingGiant[];
   monthlyActivity: MonthlyActivity[];
 }
@@ -372,9 +373,17 @@ const lineOptions = computed(() => {
             </div>
             <div v-if="report.couplingAlerts?.length" class="space-y-2">
               <h3 class="text-sm font-semibold text-gray-700 uppercase tracking-wider">Highest Blast-Radius Commits</h3>
-              <ul class="text-sm space-y-1 text-gray-600">
-                <li v-for="(alert, index) in report.couplingAlerts" :key="index" class="p-2 bg-gray-50 rounded border border-gray-100 truncate font-mono text-xs">
-                  {{ alert }}
+              <ul class="text-sm space-y-2 text-gray-600">
+                <li v-for="(alert, index) in report.couplingAlerts" :key="index" class="p-3 bg-gray-50 rounded border border-gray-100">
+                  <div class="flex items-center gap-2 mb-1">
+                    <code class="text-xs bg-gray-200 text-gray-700 px-1.5 py-0.5 rounded font-mono">{{ alert.sha.substring(0, 8) }}</code>
+                    <span class="text-sm text-gray-800 truncate">{{ alert.subject }}</span>
+                  </div>
+                  <div class="flex gap-3 text-xs text-gray-500">
+                    <span>{{ alert.filesChanged }} files</span>
+                    <span class="text-green-600">+{{ alert.insertions }}</span>
+                    <span class="text-red-500">-{{ alert.deletions }}</span>
+                  </div>
                 </li>
               </ul>
             </div>

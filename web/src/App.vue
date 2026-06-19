@@ -33,7 +33,7 @@ const handleAnalyze = async () => {
   error.value = ''
   
   try {
-    const res = await fetch(`http://localhost:8080/api/analyze?path=${encodeURIComponent(path.value)}`)
+    const res = await fetch(`/api/analyze?path=${encodeURIComponent(path.value)}`)
     if (!res.ok) {
       const errData = await res.json()
       throw new Error(errData.error || 'Analysis failed')
@@ -84,7 +84,7 @@ const scatterOptions = {
 }
 
 const barData = computed(() => {
-  if (!report.value) return { labels: [], datasets: [] }
+  if (!report.value?.busFactor?.length) return { labels: [], datasets: [] }
   const top5 = report.value.busFactor.slice(0, 5)
   return {
     labels: top5.map(c => c.name),

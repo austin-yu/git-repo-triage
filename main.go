@@ -174,7 +174,7 @@ func analyzeContributors(executor CommandExecutor, repoPath string) ([]Contribut
 		return nil, fmt.Errorf("contributor analysis failed: %w", err)
 	}
 
-	var contributors []Contributor
+	contributors := make([]Contributor, 0)
 	for name, commits := range parseCountList(raw) {
 		contributors = append(contributors, Contributor{Name: name, Commits: commits})
 	}

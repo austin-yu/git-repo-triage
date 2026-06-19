@@ -111,3 +111,15 @@ cd web && npm run dev
 ```
 
 The Vite dev server runs on `http://localhost:5173` and proxies `/api` requests to the Go backend on port 8080.
+
+## Supported Languages
+
+repo-triage is language-agnostic. It analyses Git history, not source code syntax. The Sleeping Giants chart uses file extensions to find source files and currently recognises:
+
+Go, TypeScript, JavaScript, Vue, Python, Java, Rust, Ruby, C, C++, C#, Swift, Kotlin, Scala, PHP, Elixir, Erlang, Haskell, OCaml, Clojure, Dart, Lua, R, Julia, Zig, and Nim.
+
+All other visualisations (Risk Matrix, Bus Factor, Momentum) work with any repository regardless of language.
+
+## License
+
+Apache-2.0 — see [LICENSE](LICENSE) for details.

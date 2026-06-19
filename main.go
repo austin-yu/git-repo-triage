@@ -32,10 +32,24 @@ const (
 var (
 	ExcludePatterns = []string{
 		"node_modules",
-		"go.sum",
-		"yarn.lock",
 		"vendor",
 		"dist",
+		".git",
+		"__pycache__",
+		".venv",
+		"target",
+		"build",
+		".gradle",
+		".next",
+		"coverage",
+		".yarn",
+		"go.sum",
+		"yarn.lock",
+		"package-lock.json",
+		"Cargo.lock",
+		"Gemfile.lock",
+		"poetry.lock",
+		"pnpm-lock.yaml",
 	}
 
 	FirefightingPatterns = []string{
@@ -313,11 +327,14 @@ func analyzeSleepingGiants(executor CommandExecutor, repoPath string) ([]Sleepin
 	excludePattern := buildExcludePattern(ExcludePatterns)
 
 	// Find source files, get line counts, sorted by size descending
-	// Exclude binary/generated files and common non-code patterns
+	// Covers major language ecosystems
 	filesCmd := fmt.Sprintf(
-		"find %s -type f \\( -name '*.go' -o -name '*.ts' -o -name '*.js' -o -name '*.vue' "+
-			"-o -name '*.py' -o -name '*.java' -o -name '*.rs' -o -name '*.rb' -o -name '*.cpp' "+
-			"-o -name '*.c' -o -name '*.cs' -o -name '*.swift' -o -name '*.kt' \\) "+
+		"find %s -type f \\( -name '*.go' -o -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' -o -name '*.vue' "+
+			"-o -name '*.py' -o -name '*.java' -o -name '*.rs' -o -name '*.rb' -o -name '*.cpp' -o -name '*.hpp' "+
+			"-o -name '*.c' -o -name '*.h' -o -name '*.cs' -o -name '*.swift' -o -name '*.kt' -o -name '*.kts' "+
+			"-o -name '*.scala' -o -name '*.php' -o -name '*.ex' -o -name '*.exs' -o -name '*.erl' "+
+			"-o -name '*.hs' -o -name '*.ml' -o -name '*.clj' -o -name '*.dart' -o -name '*.lua' "+
+			"-o -name '*.r' -o -name '*.R' -o -name '*.jl' -o -name '*.zig' -o -name '*.nim' \\) "+
 			"| grep -vE '%s' | head -50",
 		repoPath, excludePattern,
 	)
@@ -358,9 +375,10 @@ func analyzeSleepingGiants(executor CommandExecutor, repoPath string) ([]Sleepin
 		}
 		daysSince := parseRelativeTime(daysRaw)
 
-		// Rough complexity: count functions/methods as a proxy
+		// Rough complexity: count functions/methods/class definitions as a proxy
+		// Covers Go, Python, JS/TS, Java/Kotlin/Scala, Rust, Ruby, C#, PHP, Elixir, etc.
 		complexCmd := fmt.Sprintf(
-			"grep -cE '(^func |^def |function |class |interface )' '%s' 2>/dev/null || echo 0",
+			"grep -cE '(^func |^def |^fn |function |class |interface |trait |impl |module |struct |enum |pub fn |private |protected |public )' '%s' 2>/dev/null || echo 0",
 			file,
 		)
 		complexRaw, _ := executor.Run(complexCmd)

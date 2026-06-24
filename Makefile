@@ -2,7 +2,7 @@
 
 build: frontend
 	mkdir -p bin
-	go build -o bin/repo-triage
+	GOOS=windows GOARCH=amd64 go build -o bin/repo-triage-windows-amd64.exe
 
 frontend:
 	cd web && npm install && npm run build

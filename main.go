@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -113,13 +114,42 @@ type CommandExecutor interface {
 // DefaultExecutor implements CommandExecutor
 type DefaultExecutor struct{}
 
+func resolveShell() (string, string) {
+	if runtime.GOOS == "windows" {
+		gitBash := `C:\Program Files\Git\bin\bash.exe`
+		if _, err := os.Stat(gitBash); err == nil {
+			return gitBash, "-lc"
+		}
+	}
+	return "bash", "-c"
+}
+
 func (e *DefaultExecutor) Run(cmdString string) (string, error) {
-	cmd := exec.Command("bash", "-c", cmdString)
-	out, err := cmd.Output()
+	wrapped := "export PATH=\"$PATH:/c/Program\\ Files/Git/cmd:/mingw64/bin\"; " + cmdString
+	shellPath, shellArg := resolveShell()
+	cmd := exec.Command(shellPath, shellArg, wrapped)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("command execution failed: %w", err)
+		trimmed := strings.TrimSpace(string(out))
+		if trimmed != "" {
+			return "", fmt.Errorf("command execution failed: %w: %s: %s", err, cmdString, trimmed)
+		}
+		return "", fmt.Errorf("command execution failed: %w: %s", err, cmdString)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// normalizeForBashPath converts Windows separators to forward slashes for bash tools.
+func normalizeForBashPath(path string) string {
+	return filepath.ToSlash(path)
+}
+
+// bashQuoteArg safely wraps an argument for bash single-quote parsing.
+func bashQuoteArg(s string) string {
+	if s == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
 // --- Parsing Helpers ---
@@ -176,12 +206,13 @@ func isValidGitRepo(repoPath string) error {
 // analyzeChurnAndBugs extracts the Risk Matrix data
 func analyzeChurnAndBugs(executor CommandExecutor, repoPath string) (map[string]int, map[string]int, error) {
 	excludePattern := buildExcludePattern(ExcludePatterns)
+	repoPathArg := bashQuoteArg(normalizeForBashPath(repoPath))
 
 	// Build churn command: files changed in last year
 	churnCmd := fmt.Sprintf(
 		"git -C %s log --format=format: --name-only --since='%s' --no-merges | "+
 			"grep -vE '%s' | sort | uniq -c | sort -nr | head -%d",
-		repoPath, TimePeriod, excludePattern, GitListLimit,
+		repoPathArg, TimePeriod, excludePattern, GitListLimit,
 	)
 
 	churnRaw, err := executor.Run(churnCmd)
@@ -193,7 +224,7 @@ func analyzeChurnAndBugs(executor CommandExecutor, repoPath string) (map[string]
 	bugsCmd := fmt.Sprintf(
 		"git -C %s log -i -E --grep='fix|bug|broken' --name-only --format='' "+
 			"--since='%s' --no-merges | grep -vE '%s' | sort | uniq -c",
-		repoPath, TimePeriod, excludePattern,
+		repoPathArg, TimePeriod, excludePattern,
 	)
 
 	bugsRaw, err := executor.Run(bugsCmd)
@@ -206,9 +237,10 @@ func analyzeChurnAndBugs(executor CommandExecutor, repoPath string) (map[string]
 
 // analyzeContributors extracts the Bus Factor data
 func analyzeContributors(executor CommandExecutor, repoPath string) ([]Contributor, error) {
+	repoPathArg := bashQuoteArg(normalizeForBashPath(repoPath))
 	cmd := fmt.Sprintf(
 		"git -C %s shortlog -sn --no-merges --since='%s' HEAD",
-		repoPath, TimePeriod,
+		repoPathArg, TimePeriod,
 	)
 
 	raw, err := executor.Run(cmd)
@@ -227,11 +259,12 @@ func analyzeContributors(executor CommandExecutor, repoPath string) ([]Contribut
 // analyzeFirefighting extracts the Firefighting Metrics
 func analyzeFirefighting(executor CommandExecutor, repoPath string) (int, error) {
 	patterns := strings.Join(FirefightingPatterns, "|")
+	repoPathArg := bashQuoteArg(normalizeForBashPath(repoPath))
 
 	cmd := fmt.Sprintf(
 		"git -C %s log --oneline --since='%s' --no-merges | "+
 			"grep -iE '%s' | wc -l",
-		repoPath, TimePeriod, patterns,
+		repoPathArg, TimePeriod, patterns,
 	)
 
 	raw, err := executor.Run(cmd)
@@ -245,10 +278,11 @@ func analyzeFirefighting(executor CommandExecutor, repoPath string) (int, error)
 
 // analyzeCoupling extracts the Architectural Blast Radius data with commit SHAs
 func analyzeCoupling(executor CommandExecutor, repoPath string) ([]CouplingAlert, error) {
+	repoPathArg := bashQuoteArg(normalizeForBashPath(repoPath))
 	// Use a delimiter to pair each commit line with its stat line
 	cmd := fmt.Sprintf(
 		"git -C %s log --format='COMMIT %%H %%s' --shortstat --since='%s' --no-merges",
-		repoPath, TimePeriod,
+		repoPathArg, TimePeriod,
 	)
 
 	raw, err := executor.Run(cmd)
@@ -325,6 +359,8 @@ func extractStatNumber(line string, keyword string) int {
 // analyzeSleepingGiants finds large, complex files that haven't been touched recently
 func analyzeSleepingGiants(executor CommandExecutor, repoPath string) ([]SleepingGiant, error) {
 	excludePattern := buildExcludePattern(ExcludePatterns)
+	normalizedRepoPath := normalizeForBashPath(repoPath)
+	repoPathArg := bashQuoteArg(normalizedRepoPath)
 
 	// Find source files, get line counts, sorted by size descending
 	// Covers major language ecosystems
@@ -336,7 +372,7 @@ func analyzeSleepingGiants(executor CommandExecutor, repoPath string) ([]Sleepin
 			"-o -name '*.hs' -o -name '*.ml' -o -name '*.clj' -o -name '*.dart' -o -name '*.lua' "+
 			"-o -name '*.r' -o -name '*.R' -o -name '*.jl' -o -name '*.zig' -o -name '*.nim' \\) "+
 			"| grep -vE '%s' | head -50",
-		repoPath, excludePattern,
+		repoPathArg, excludePattern,
 	)
 
 	filesRaw, err := executor.Run(filesCmd)
@@ -353,7 +389,7 @@ func analyzeSleepingGiants(executor CommandExecutor, repoPath string) ([]Sleepin
 		}
 
 		// Get line count
-		wcCmd := fmt.Sprintf("wc -l < '%s'", file)
+		wcCmd := fmt.Sprintf("wc -l < %s", bashQuoteArg(file))
 		wcRaw, err := executor.Run(wcCmd)
 		if err != nil {
 			continue
@@ -364,10 +400,10 @@ func analyzeSleepingGiants(executor CommandExecutor, repoPath string) ([]Sleepin
 		}
 
 		// Get days since last commit for this file
-		relPath := strings.TrimPrefix(file, repoPath+"/")
+		relPath := strings.TrimPrefix(file, normalizedRepoPath+"/")
 		daysCmd := fmt.Sprintf(
-			"git -C %s log -1 --format='%%cr' -- '%s' 2>/dev/null",
-			repoPath, relPath,
+			"git -C %s log -1 --format='%%cr' -- %s 2>/dev/null",
+			repoPathArg, bashQuoteArg(relPath),
 		)
 		daysRaw, err := executor.Run(daysCmd)
 		if err != nil || daysRaw == "" {
@@ -378,8 +414,8 @@ func analyzeSleepingGiants(executor CommandExecutor, repoPath string) ([]Sleepin
 		// Rough complexity: count functions/methods/class definitions as a proxy
 		// Covers Go, Python, JS/TS, Java/Kotlin/Scala, Rust, Ruby, C#, PHP, Elixir, etc.
 		complexCmd := fmt.Sprintf(
-			"grep -cE '(^func |^def |^fn |function |class |interface |trait |impl |module |struct |enum |pub fn |private |protected |public )' '%s' 2>/dev/null || echo 0",
-			file,
+			"grep -cE '(^func |^def |^fn |function |class |interface |trait |impl |module |struct |enum |pub fn |private |protected |public )' %s 2>/dev/null || echo 0",
+			bashQuoteArg(file),
 		)
 		complexRaw, _ := executor.Run(complexCmd)
 		complexity, _ := strconv.Atoi(strings.TrimSpace(complexRaw))
@@ -425,8 +461,9 @@ func parseRelativeTime(relative string) int {
 
 // analyzeMonthlyActivity generates monthly commit and hotfix counts for the past 12 months
 func analyzeMonthlyActivity(executor CommandExecutor, repoPath string) ([]MonthlyActivity, error) {
+	repoPathArg := bashQuoteArg(normalizeForBashPath(repoPath))
 	// Get commits per month — use --date=format with %ad to avoid shell escaping issues
-	commitsCmd := "git -C " + repoPath + " log --date=format:'%Y-%m' --format='%ad' --since='" + TimePeriod + "' --no-merges | sort | uniq -c"
+	commitsCmd := "git -C " + repoPathArg + " log --date=format:'%Y-%m' --format='%ad' --since='" + TimePeriod + "' --no-merges | sort | uniq -c"
 	commitsRaw, err := executor.Run(commitsCmd)
 	if err != nil {
 		return make([]MonthlyActivity, 0), nil
@@ -436,7 +473,7 @@ func analyzeMonthlyActivity(executor CommandExecutor, repoPath string) ([]Monthl
 
 	// Get hotfixes per month
 	patterns := strings.Join(FirefightingPatterns, "|")
-	hotfixCmd := "git -C " + repoPath + " log --date=format:'%Y-%m' --format='%ad %s' --since='" + TimePeriod + "' --no-merges | " +
+	hotfixCmd := "git -C " + repoPathArg + " log --date=format:'%Y-%m' --format='%ad %s' --since='" + TimePeriod + "' --no-merges | " +
 		"grep -iE '" + patterns + "' | awk '{print $1}' | sort | uniq -c"
 	hotfixRaw, _ := executor.Run(hotfixCmd)
 	hotfixByMonth := parseCountList(hotfixRaw)
